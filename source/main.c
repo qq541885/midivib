@@ -96,17 +96,61 @@ static int g_vib_n = 0;
 static void *g_font_data = NULL;
 static size_t g_font_size = 0;
 
-static int load_system_font(void) {
-  const u32 types = PlSharedFontType_Standard | PlSharedFontType_ChineseSimplified;
-  if (R_FAILED(plInitialize(types))) return -1;
+/* 诊断用：失败时把这几项打到 console 上 */
+static Result g_pl_rc     = 0;
+static Result g_plfont_rc = 0;
+static int    g_font_type = -1;   /* 实际拿到的字体类型 */
+static char   g_font_err[128] = "";
 
-  PlFontData fd;
-  if (R_FAILED(plGetSharedFontByType(&fd, PlSharedFontType_ChineseSimplified))) {
-    if (R_FAILED(plGetSharedFontByType(&fd, PlSharedFontType_Standard))) return -1;
+/* libnx 有些版本没导出这个 flag，补一个数值别名 */
+#ifndef PlSharedFontTypeFlag_ExtendedChineseSimplified
+#define PlSharedFontTypeFlag_ExtendedChineseSimplified (1u << 2)
+#endif
+#ifndef PlSharedFontType_ExtChineseSimplified
+#define PlSharedFontType_ExtChineseSimplified ((PlSharedFontType)2)
+#endif
+
+static int load_system_font(void) {
+  /* plInitialize 的参数是 flags 位掩码，不是字体类型索引：
+   *   bit0 Standard / bit1 ChineseSimplified / bit2 ExtendedChineseSimplified
+   * 之前把索引 0 和 1 按位或传进去，等于只请求了 Standard，
+   * 后面再去取简体中文自然拿不到。 */
+  const u32 flags = PlSharedFontTypeFlag_Standard |
+                    PlSharedFontTypeFlag_ChineseSimplified |
+                    PlSharedFontTypeFlag_ExtendedChineseSimplified;
+
+  g_pl_rc = plInitialize(flags);
+  if (R_FAILED(g_pl_rc)) {
+    /* SDL2 的 switch video 后端可能已经初始化过 pl，此时再调会返回
+     * LibnxError_AlreadyInitialized —— 这不是错误，继续取字体即可。 */
+    const Result already = MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized);
+    if (g_pl_rc != already) {
+      snprintf(g_font_err, sizeof(g_font_err), "plInitialize=0x%08x", g_pl_rc);
+      return -1;
+    }
   }
-  g_font_data = fd.address;
-  g_font_size = fd.size;
-  return 0;
+
+  /* 优先级：简中扩展（字形最全）-> 简中 -> 标准 */
+  static const PlSharedFontType order[3] = {
+    PlSharedFontType_ExtChineseSimplified,
+    PlSharedFontType_ChineseSimplified,
+    PlSharedFontType_Standard,
+  };
+
+  for (int i = 0; i < 3; i++) {
+    PlFontData fd;
+    memset(&fd, 0, sizeof(fd));
+    g_plfont_rc = plGetSharedFontByType(&fd, order[i]);
+    if (R_SUCCEEDED(g_plfont_rc) && fd.address && fd.size > 0) {
+      g_font_data = fd.address;
+      g_font_size = fd.size;
+      g_font_type = (int)order[i];
+      return 0;
+    }
+  }
+
+  snprintf(g_font_err, sizeof(g_font_err), "plGetSharedFontByType=0x%08x", g_plfont_rc);
+  return -1;
 }
 
 static TTF_Font *open_font_at(int px) {
@@ -542,15 +586,71 @@ int main(int argc, char **argv) {
                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                            SCR_W, SCR_H, SDL_WINDOW_SHOWN);
   g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+  if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED);
+  if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_SOFTWARE);
+  if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
   if (!g_win || !g_ren) {
     SDL_Quit();
     return 1;
   }
 
-  if (TTF_Init() == 0 && load_system_font() == 0) {
-    g_f24 = open_font_at(24);
-    g_f20 = open_font_at(20);
-    g_f16 = open_font_at(16);
+  /* 字体分步检查，任何一步失败都不再静默空白，而是把原因显示出来 */
+  int   font_ok = 0;
+  int   ttf_ok  = 0;
+  char  ttf_err[128] = "";
+
+  if (TTF_Init() != 0) {
+    snprintf(ttf_err, sizeof(ttf_err), "TTF_Init: %s", TTF_GetError());
+  } else {
+    ttf_ok = 1;
+    if (load_system_font() == 0) {
+      g_f24 = open_font_at(24);
+      g_f20 = open_font_at(20);
+      g_f16 = open_font_at(16);
+      if (g_f24 && g_f20 && g_f16) {
+        font_ok = 1;
+      } else {
+        snprintf(g_font_err, sizeof(g_font_err), "TTF_OpenFontRW: %s", TTF_GetError());
+      }
+    }
+  }
+
+  if (!font_ok) {
+    /* 屏幕上一片空白的原因就在这里，用 console 把诊断写出来 */
+    if (g_f24) { TTF_CloseFont(g_f24); g_f24 = NULL; }
+    if (g_f20) { TTF_CloseFont(g_f20); g_f20 = NULL; }
+    if (g_f16) { TTF_CloseFont(g_f16); g_f16 = NULL; }
+    if (ttf_ok) TTF_Quit();
+    SDL_DestroyRenderer(g_ren); g_ren = NULL;
+    SDL_DestroyWindow(g_win);   g_win = NULL;
+    SDL_Quit();
+
+    consoleInit(NULL);
+    printf("\x1b[2J\x1b[H");
+    printf("=== MIDI 震动播放器：字体加载失败 ===\n\n");
+    printf("上一步结果：\n");
+    printf("  TTF_Init          : %s\n", ttf_ok ? "OK" : ttf_err);
+    printf("  plInitialize      : 0x%08x\n", (unsigned)g_pl_rc);
+    printf("  plGetSharedFont   : 0x%08x\n", (unsigned)g_plfont_rc);
+    printf("  取到的字体类型    : %d\n", g_font_type);
+    printf("  字体数据          : %p\n", g_font_data);
+    printf("  字体大小          : %u 字节\n", (unsigned)g_font_size);
+    printf("  字体错误          : %s\n", g_font_err[0] ? g_font_err : "(无)");
+    printf("  TTF 错误          : %s\n", ttf_err[0] ? ttf_err : "(无)");
+    printf("  SDL_GetError      : %s\n", SDL_GetError());
+    printf("\n按 + 退出，把这段拍下来或抄下来\n");
+
+    consoleUpdate(NULL);
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState dpad;
+    padInitializeDefault(&dpad);
+    while (appletMainLoop()) {
+      padUpdate(&dpad);
+      if (padGetButtonsDown(&dpad) & HidNpadButton_Plus) break;
+      consoleUpdate(NULL);
+    }
+    consoleExit(NULL);
+    return 2;
   }
 
   padConfigureInput(1, HidNpadStyleSet_NpadStandard);
