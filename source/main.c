@@ -103,21 +103,21 @@ static int    g_font_type = -1;   /* 实际拿到的字体类型 */
 static char   g_font_err[128] = "";
 
 /* libnx 有些版本没导出这个 flag，补一个数值别名 */
-#ifndef PlSharedFontTypeFlag_ExtendedChineseSimplified
-#define PlSharedFontTypeFlag_ExtendedChineseSimplified (1u << 2)
-#endif
 #ifndef PlSharedFontType_ExtChineseSimplified
 #define PlSharedFontType_ExtChineseSimplified ((PlSharedFontType)2)
 #endif
+#ifndef BIT
+#define BIT(n) (1u << (n))
+#endif
 
 static int load_system_font(void) {
-  /* plInitialize 的参数是 flags 位掩码，不是字体类型索引：
-   *   bit0 Standard / bit1 ChineseSimplified / bit2 ExtendedChineseSimplified
-   * 之前把索引 0 和 1 按位或传进去，等于只请求了 Standard，
-   * 后面再去取简体中文自然拿不到。 */
-  const u32 flags = PlSharedFontTypeFlag_Standard |
-                    PlSharedFontTypeFlag_ChineseSimplified |
-                    PlSharedFontTypeFlag_ExtendedChineseSimplified;
+  /* plInitialize 的参数是按字体类型索引取位的掩码，不是索引本身：
+   *   索引 0 = Standard，1 = ChineseSimplified，2 = ExtChineseSimplified
+   * 掩码则是对应 bit。之前写成 "索引 0 | 索引 1" = 1，只请求到 Standard，
+   * 再去取简体中文当然拿不到，于是整屏没有字。 */
+  const u32 flags = BIT(PlSharedFontType_Standard) |
+                    BIT(PlSharedFontType_ChineseSimplified) |
+                    BIT(PlSharedFontType_ExtChineseSimplified);
 
   g_pl_rc = plInitialize(flags);
   if (R_FAILED(g_pl_rc)) {
