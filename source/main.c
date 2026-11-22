@@ -156,10 +156,10 @@ static void vib_send(float amp, float flo, float fhi) {
 
   HidVibrationValue v;
   memset(&v, 0, sizeof(v));
-  v.ampLow  = amp;
-  v.freqLow = flo;
-  v.ampHigh  = amp * 0.55f;
-  v.freqHigh = fhi;
+  v.amp_low  = amp;
+  v.freq_low = flo;
+  v.amp_high  = amp * 0.55f;
+  v.freq_high = fhi;
 
   HidVibrationValue vals[2];
   vals[0] = v;
@@ -171,8 +171,8 @@ static void vib_off(void) {
   if (g_vib_n <= 0) return;
   HidVibrationValue z;
   memset(&z, 0, sizeof(z));
-  z.freqLow  = VIB_FMIN;
-  z.freqHigh = 82.0f;
+  z.freq_low  = VIB_FMIN;
+  z.freq_high = 82.0f;
   HidVibrationValue vals[2] = { z, z };
   hidSendVibrationValues(g_vib, vals, (size_t)(g_vib_n > 2 ? 2 : g_vib_n));
 }

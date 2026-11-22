@@ -1,4 +1,4 @@
-name: build-midivib
+﻿name: build-midivib
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
           if [ -z "$PM" ]; then echo "::error::pacman not found"; exit 1; fi
           "$PM" -Sy --noconfirm --needed 2>&1 | tail -3 || echo "::warning::sync failed, using image contents"
           for pkg in switch-sdl2 switch-sdl2_ttf switch-libpng switch-freetype switch-zlib \
-                     switch-mesa switch-glad switch-libdrm_nouveau switch-harfbuzz switch-bzip2 switch-lzma; do
+                     switch-mesa switch-glad switch-libdrm_nouveau switch-harfbuzz switch-bzip2; do
             if "$PM" -Q "$pkg" >/dev/null 2>&1; then
               echo "have $pkg"
             else
@@ -67,3 +67,4 @@ jobs:
             midivib.elf
             midivib.nacp
           if-no-files-found: error
+
